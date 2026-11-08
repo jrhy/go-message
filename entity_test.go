@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 func testMakeEntity() *Entity {
@@ -470,5 +472,47 @@ func TestWalk_multipart(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Entity.Walk() =\n%#v\nbut want:\n%#v", got, want)
+	}
+}
+
+func TestNew_transferEncodingBeforeCharset(t *testing.T) {
+	previous := CharsetReader
+	defer func() { CharsetReader = previous }()
+	CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		if charset == "iso-8859-1" {
+			return charmap.ISO8859_1.NewDecoder().Reader(input), nil
+		}
+		return nil, errors.New("unsupported charset")
+	}
+
+	tests := []struct {
+		name, encoding, charset, body, want string
+		unknownEncoding, unknownCharset     bool
+	}{
+		{"unknown encoding with supported charset", "i-dont-exist", "iso-8859-1", "caf\xe9", "caf\xe9", true, false},
+		{"unknown encoding with unknown charset", "i-dont-exist", "i-dont-exist", "caf\xe9", "caf\xe9", true, false},
+		{"supported encoding with supported charset", "base64", "iso-8859-1", "Y2Fm6Q==", "café", false, false},
+		{"supported encoding with unknown charset", "base64", "i-dont-exist", "Y2Fm6Q==", "caf\xe9", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var h Header
+			h.Set("Content-Type", "text/plain; charset="+tt.charset)
+			h.Set("Content-Transfer-Encoding", tt.encoding)
+			e, err := New(h, strings.NewReader(tt.body))
+			if IsUnknownEncoding(err) != tt.unknownEncoding || IsUnknownCharset(err) != tt.unknownCharset || (err != nil && !tt.unknownEncoding && !tt.unknownCharset) {
+				t.Errorf("New() error = %v, want unknown encoding %v, unknown charset %v", err, tt.unknownEncoding, tt.unknownCharset)
+			}
+			if e == nil {
+				t.Fatal("New() returned a nil entity")
+			}
+			b, err := ioutil.ReadAll(e.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) != tt.want {
+				t.Errorf("body = %q, want %q", b, tt.want)
+			}
+		})
 	}
 }

@@ -27,8 +27,9 @@ type Entity struct {
 // transfer encoding and charset are automatically decoded to UTF-8.
 //
 // If the message uses an unknown transfer encoding or charset, New returns an
-// error that verifies IsUnknownCharset, but also returns an Entity that can
-// be read.
+// error that verifies IsUnknownEncoding or IsUnknownCharset, but also returns
+// an Entity that can be read. If the transfer encoding is unknown, the body is
+// left unchanged and charset conversion is not attempted.
 func New(header Header, body io.Reader) (*Entity, error) {
 	var err error
 
@@ -49,7 +50,8 @@ func New(header Header, body io.Reader) (*Entity, error) {
 	}
 
 	// RFC 2046 section 4.1.2: charset only applies to text/*
-	if strings.HasPrefix(mediaType, "text/") {
+	// Do not convert the charset if the transfer encoding could not be decoded.
+	if err == nil && strings.HasPrefix(mediaType, "text/") {
 		if ch, ok := mediaParams["charset"]; ok {
 			if converted, charsetErr := charsetReader(ch, body); charsetErr != nil {
 				err = UnknownCharsetError{charsetErr}
